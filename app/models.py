@@ -92,6 +92,21 @@ class DocumentChange(BaseModel):
             raise ValueError("exactly one of 'target' or 'range' must be set")
         return self
 
+    @model_validator(mode="after")
+    def _check_insert_range_is_a_point(self) -> "DocumentChange":
+        if self.operation == "insert" and self.range is not None:
+            if self.range.start != self.range.end:
+                raise ValueError("'insert' requires range.start == range.end")
+        return self
+
+    @model_validator(mode="after")
+    def _check_new_text_matches_operation(self) -> "DocumentChange":
+        if self.operation == "delete" and self.new_text != "":
+            raise ValueError("'delete' requires new_text to be empty")
+        if self.operation == "replace" and self.new_text == "":
+            raise ValueError("'replace' requires a non-empty new_text")
+        return self
+
 
 class PatchRequest(BaseModel):
     """Request body for PATCH /documents/{id}.

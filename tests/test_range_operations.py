@@ -54,27 +54,29 @@ def test_unknown_operation_raises():
 
 
 def test_resolve_change_location_uses_range_directly():
-    change = DocumentChange(operation="replace", range=ChangeRange(start=1, end=3))
+    change = DocumentChange(
+        operation="replace", range=ChangeRange(start=1, end=3), new_text="x"
+    )
     assert _resolve_change_location("abcdef", change) == (1, 3)
 
 
 def test_resolve_change_location_finds_first_occurrence():
     change = DocumentChange(
-        operation="replace", target=ChangeTarget(text="cat", occurrence=1)
+        operation="replace", target=ChangeTarget(text="cat", occurrence=1), new_text="x"
     )
     assert _resolve_change_location("the cat sat on the cat mat", change) == (4, 7)
 
 
 def test_resolve_change_location_finds_second_occurrence():
     change = DocumentChange(
-        operation="replace", target=ChangeTarget(text="cat", occurrence=2)
+        operation="replace", target=ChangeTarget(text="cat", occurrence=2), new_text="x"
     )
     assert _resolve_change_location("the cat sat on the cat mat", change) == (19, 22)
 
 
 def test_resolve_change_location_missing_occurrence_raises():
     change = DocumentChange(
-        operation="replace", target=ChangeTarget(text="dog", occurrence=1)
+        operation="replace", target=ChangeTarget(text="dog", occurrence=1), new_text="x"
     )
     with pytest.raises(ValueError):
         _resolve_change_location("the cat sat", change)

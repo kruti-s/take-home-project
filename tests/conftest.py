@@ -11,7 +11,7 @@ from app.main import app
 
 @pytest.fixture
 def conn():
-    connection = sqlite3.connect(":memory:")
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     init_db(connection)

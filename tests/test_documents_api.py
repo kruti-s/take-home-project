@@ -169,6 +169,45 @@ def test_patch_document_rejects_both_locators(client):
     assert resp.status_code == 422
 
 
+def test_patch_document_insert_requires_start_equals_end(client):
+    created = _create(client, content="the fox")
+    resp = client.patch(
+        f"/documents/{created['doc_id']}",
+        json={
+            "changes": [
+                {"operation": "insert", "range": {"start": 4, "end": 5}, "new_text": "quick "}
+            ]
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_document_delete_rejects_nonempty_new_text(client):
+    created = _create(client, content="the quick brown fox")
+    resp = client.patch(
+        f"/documents/{created['doc_id']}",
+        json={
+            "changes": [
+                {"operation": "delete", "range": {"start": 3, "end": 9}, "new_text": "oops"}
+            ]
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_document_replace_rejects_empty_new_text(client):
+    created = _create(client, content="the quick brown fox")
+    resp = client.patch(
+        f"/documents/{created['doc_id']}",
+        json={
+            "changes": [
+                {"operation": "replace", "range": {"start": 4, "end": 9}, "new_text": ""}
+            ]
+        },
+    )
+    assert resp.status_code == 422
+
+
 def test_patch_document_not_found(client):
     resp = client.patch(
         "/documents/999",
