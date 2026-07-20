@@ -130,15 +130,16 @@ a text-match edit is near-linear (`str.find` per occurrence), a `range` edit
 is `O(length)` string slicing, and the preview diff (stdlib `difflib`) is
 tested against a 20,000-line document with a single-line change.
 
-**Search is index-backed, not a request-time scan.** SQLite's FTS5 keeps an
-inverted index in sync via SQL triggers (`app/schema.sql`) on every content
-change, so a search is an index lookup + BM25 ranking — latency scales with
-matching terms, not corpus size. Chosen over a hand-rolled index because
-FTS5 is built into SQLite (no extra dependency), stays transactionally
-consistent with writes, persists across restarts, and provides tokenization,
-ranking, and snippets. Trade-off: SQLite-specific (a Postgres move means
-`tsvector`/`pg_trgm`), and slightly slower than an in-memory index — which
-only matters far beyond this scale.
+**Search uses an index, not a scan.** SQLite's FTS5
+extension keeps a lookup table of which words appear in which documents,
+updated automatically whenever a document is edited (`app/schema.sql`).
+Searching means looking a word up in that table, not reading every
+document — so it stays fast regardless of how many documents there are.
+It's built into SQLite (no extra dependency to run our own), can't drift
+out of sync with the data, and survives a server restart. Trade-off: it
+ties us to SQLite specifically, and it's marginally slower than a
+hand-built in-memory index — a gap that only matters at a much larger
+scale than this tool needs.
 
 ## Design rationale
 
