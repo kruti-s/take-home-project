@@ -8,6 +8,17 @@ from typing import Literal
 from app.models import DocumentChange, DocumentOut, PatchPreviewOut
 
 
+class ChangeError(ValueError):
+    """Raised when a change can't be resolved or applied against document text.
+
+    Subclasses ValueError so existing `except ValueError` handling (e.g.
+    the PATCH route) keeps working unchanged; callers that need to
+    distinguish "bad change" from other ValueErrors (e.g. bulk-changes,
+    which must keep processing the rest of a batch) can catch this
+    specifically.
+    """
+
+
 def apply_range_operation(
     text: str,
     operation: Literal["insert", "replace", "delete"],
@@ -31,24 +42,24 @@ def apply_range_operation(
         left unmodified.
 
     Raises:
-        ValueError: If `start`/`end` are out of bounds for `text`, or
+        ChangeError: If `start`/`end` are out of bounds for `text`, or
             `operation` is not one of the supported values.
     """
     if not (0 <= start <= len(text)):
-        raise ValueError(f"start {start} out of bounds for text of length {len(text)}")
+        raise ChangeError(f"start {start} out of bounds for text of length {len(text)}")
 
     if operation == "insert":
         return text[:start] + replacement + text[start:]
 
     if not (start <= end <= len(text)):
-        raise ValueError(f"end {end} out of bounds for text of length {len(text)}")
+        raise ChangeError(f"end {end} out of bounds for text of length {len(text)}")
 
     if operation == "delete":
         return text[:start] + text[end:]
     if operation == "replace":
         return text[:start] + replacement + text[end:]
 
-    raise ValueError(f"unknown operation: {operation}")
+    raise ChangeError(f"unknown operation: {operation}")
 
 
 def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, int]:
@@ -63,28 +74,29 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
         A `(start, end)` offset pair into `text`.
 
     Raises:
-        ValueError: If neither `target` nor `range` is set, or if `target`
-            is set but the requested occurrence of its text isn't found.
+        ChangeError: If neither `target` nor `range` is set, or if
+            `target` is set but the requested occurrence of its text
+            isn't found.
     """
     if change.range is not None:
         return change.range.start, change.range.end
 
     if change.target is not None:
         if change.target.occurrence < 1:
-            raise ValueError("target.occurrence must be >= 1")
+            raise ChangeError("target.occurrence must be >= 1")
         idx = -1
         search_from = 0
         for _ in range(change.target.occurrence):
             idx = text.find(change.target.text, search_from)
             if idx == -1:
-                raise ValueError(
-                    f"occurrence {change.target.occurrence} of "
-                    f"{change.target.text!r} not found"
+                raise ChangeError(
+                    f"{change.target.text!r} not found "
+                    f"(occurrence {change.target.occurrence})"
                 )
             search_from = idx + 1
         return idx, idx + len(change.target.text)
 
-    raise ValueError("change must specify either 'target' or 'range'")
+    raise ChangeError("change must specify either 'target' or 'range'")
 
 
 def apply_changes(text: str, changes: list[DocumentChange]) -> str:
@@ -101,8 +113,8 @@ def apply_changes(text: str, changes: list[DocumentChange]) -> str:
         The text after all changes have been applied.
 
     Raises:
-        ValueError: If a change is malformed or its target/range cannot be
-            resolved against the text at that point in the sequence.
+        ChangeError: If a change is malformed or its target/range cannot
+            be resolved against the text at that point in the sequence.
     """
     for change in changes:
         start, end = _resolve_change_location(text, change)
@@ -221,10 +233,14 @@ def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     conn.commit()
 
 
-def apply_patch(
+def apply_patch_with_diff(
     conn: sqlite3.Connection, doc_id: int, changes: list[DocumentChange]
-) -> DocumentOut:
-    """Apply an ordered list of changes to a document and record the edit.
+) -> tuple[DocumentOut, str, int]:
+    """Apply changes to a document, write them, and report the diff and new version.
+
+    This is the single shared core behind both PATCH /documents/{id} and
+    POST /documents/bulk-changes — both call this function rather than
+    reimplementing the fetch/apply/write sequence.
 
     Changes are applied sequentially: each change is resolved and applied
     against the text produced by the previous change, all within a single
@@ -240,21 +256,46 @@ def apply_patch(
         changes: Ordered list of insert/replace/delete operations to apply.
 
     Returns:
+        A `(document, diff, version)` tuple: the document after all
+        changes have been applied, a unified diff from its prior content,
+        and the new change_id recorded for this edit.
+
+    Raises:
+        KeyError: If no document with `doc_id` exists.
+        ChangeError: If a change is malformed or its target/range cannot
+            be resolved against the current document text.
+    """
+    doc = get_document(conn, doc_id)
+    new_text = apply_changes(doc.content, changes)
+    diff = diff_text(doc.content, new_text)
+
+    conn.execute("UPDATE docs SET content = ? WHERE doc_id = ?", (new_text, doc_id))
+    version = record_edit(conn, doc_id, new_text)
+    conn.commit()
+
+    return DocumentOut(doc_id=doc_id, title=doc.title, content=new_text), diff, version
+
+
+def apply_patch(
+    conn: sqlite3.Connection, doc_id: int, changes: list[DocumentChange]
+) -> DocumentOut:
+    """Apply an ordered list of changes to a document and record the edit.
+
+    Args:
+        conn: Open SQLite connection.
+        doc_id: Identifier of the document to patch.
+        changes: Ordered list of insert/replace/delete operations to apply.
+
+    Returns:
         The document after all changes have been applied.
 
     Raises:
         KeyError: If no document with `doc_id` exists.
-        ValueError: If a change is malformed or its target/range cannot be
-            resolved against the current document text.
+        ChangeError: If a change is malformed or its target/range cannot
+            be resolved against the current document text.
     """
-    doc = get_document(conn, doc_id)
-    text = apply_changes(doc.content, changes)
-
-    conn.execute("UPDATE docs SET content = ? WHERE doc_id = ?", (text, doc_id))
-    record_edit(conn, doc_id, text)
-    conn.commit()
-
-    return DocumentOut(doc_id=doc_id, title=doc.title, content=text)
+    doc, _diff, _version = apply_patch_with_diff(conn, doc_id, changes)
+    return doc
 
 
 def preview_patch(
@@ -276,8 +317,8 @@ def preview_patch(
 
     Raises:
         KeyError: If no document with `doc_id` exists.
-        ValueError: If a change is malformed or its target/range cannot be
-            resolved against the current document text.
+        ChangeError: If a change is malformed or its target/range cannot
+            be resolved against the current document text.
     """
     doc = get_document(conn, doc_id)
     new_text = apply_changes(doc.content, changes)

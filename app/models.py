@@ -74,11 +74,16 @@ class DocumentChange(BaseModel):
     Args:
         operation: One of "replace", "insert", or "delete".
         target: Text-match location for the change (mutually exclusive
-            with `range`).
+            with `range`). Not allowed for "insert" — see below.
         range: Position-based location for the change (mutually exclusive
             with `target`).
         new_text: The new content. Used as the replacement for "replace",
             the inserted text for "insert", and left as "" for "delete".
+
+    "insert" must be located by a position `range` (a single point,
+    `start == end`); it cannot use a text-match `target`, because an
+    occurrence-based locator doesn't define where relative to the match the
+    new text lands. "replace" and "delete" accept either locator.
     """
 
     operation: Literal["replace", "insert", "delete"]
@@ -90,6 +95,14 @@ class DocumentChange(BaseModel):
     def _check_exactly_one_locator(self) -> "DocumentChange":
         if (self.target is None) == (self.range is None):
             raise ValueError("exactly one of 'target' or 'range' must be set")
+        return self
+
+    @model_validator(mode="after")
+    def _check_insert_uses_range(self) -> "DocumentChange":
+        if self.operation == "insert" and self.target is not None:
+            raise ValueError(
+                "'insert' must be located by a position range, not a text-match occurrence"
+            )
         return self
 
     @model_validator(mode="after")
@@ -135,6 +148,73 @@ class PatchPreviewOut(BaseModel):
     old_content: str
     new_content: str
     diff: str
+
+
+class BulkChangeFilter(BaseModel):
+    """Selects which documents a bulk change applies to.
+
+    `ids` alone targets exactly those documents. `query` alone targets
+    every document matching it (full-text search across all documents,
+    resolved via the same search used by GET /documents/search). Given
+    together, `query` finds matches restricted to `ids` — `ids` scopes
+    the search rather than overriding it.
+
+    Args:
+        ids: Document ids to target, or to scope a `query` search to.
+        query: Full-text search query.
+    """
+
+    ids: list[int] | None = None
+    query: str | None = None
+
+
+class BulkChangeRequest(BaseModel):
+    """Request body for POST /documents/bulk-changes.
+
+    Args:
+        filter: Selects target documents. Required: a non-empty `ids` or
+            a non-empty `query` must be given — there is no "apply to
+            all documents" default.
+        changes: The same change list shape PATCH /documents/{id} takes,
+            applied independently to each targeted document.
+        preview: If true, compute diffs for every targeted document
+            without writing anything.
+    """
+
+    filter: BulkChangeFilter
+    changes: list[DocumentChange]
+    preview: bool = False
+
+
+class BulkChangeResult(BaseModel):
+    """Per-document outcome of a bulk change.
+
+    Args:
+        id: The document's id.
+        status: "ok" or "error".
+        diff: Unified diff lines from before to after; set when status is
+            "ok".
+        version: The new change_id recorded for this edit; set when
+            status is "ok" and the change was actually written (not a
+            preview).
+        message: Error description; set when status is "error".
+    """
+
+    id: int
+    status: Literal["ok", "error"]
+    diff: list[str] | None = None
+    version: int | None = None
+    message: str | None = None
+
+
+class BulkChangeResponse(BaseModel):
+    """Response body for POST /documents/bulk-changes.
+
+    Args:
+        results: One outcome per document the filter resolved to.
+    """
+
+    results: list[BulkChangeResult]
 
 
 class SearchResultItem(BaseModel):

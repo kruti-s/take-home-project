@@ -1,0 +1,196 @@
+{
+  "info": {
+    "name": "Contract Redlining & Search API",
+    "description": "Sample requests for the document redlining/search API. Import into Postman and set the {{base_url}} collection variable (defaults to http://127.0.0.1:8000).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "doc_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "Create document",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"MSA — Acme Corp\",\n  \"content\": \"This Master Services Agreement is entered into by Acme Corp. Acme Corp shall indemnify the Client against third-party claims. This Agreement is governed by the laws of the State of Delaware.\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List documents",
+          "request": { "method": "GET", "url": "{{base_url}}/documents" }
+        },
+        {
+          "name": "Get document",
+          "request": { "method": "GET", "url": "{{base_url}}/documents/{{doc_id}}" }
+        },
+        {
+          "name": "Delete document",
+          "request": { "method": "DELETE", "url": "{{base_url}}/documents/{{doc_id}}" }
+        }
+      ]
+    },
+    {
+      "name": "Change Requests (PATCH)",
+      "item": [
+        {
+          "name": "Replace by text + occurrence",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Acme Corp\", \"occurrence\": 2}, \"new_text\": \"Globex LLC\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Replace by position range",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"replace\", \"range\": {\"start\": 0, \"end\": 4}, \"new_text\": \"THIS\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Insert at position",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"insert\", \"range\": {\"start\": 42, \"end\": 42}, \"new_text\": \"(as amended) \"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete a range",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"delete\", \"range\": {\"start\": 100, \"end\": 150}, \"new_text\": \"\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Preview only (no write)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Delaware\", \"occurrence\": 1}, \"new_text\": \"New York\"}\n  ],\n  \"preview\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Multiple changes in one request",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/{{doc_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Acme Corp\", \"occurrence\": 1}, \"new_text\": \"Globex LLC\"},\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Delaware\", \"occurrence\": 1}, \"new_text\": \"New York\"}\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "Search all documents",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/documents/search?q=indemnification&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["documents", "search"],
+              "query": [
+                { "key": "q", "value": "indemnification" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Search scoped to specific document ids",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/documents/search?q=governing%20law&ids=1&ids=2",
+              "host": ["{{base_url}}"],
+              "path": ["documents", "search"],
+              "query": [
+                { "key": "q", "value": "governing law" },
+                { "key": "ids", "value": "1" },
+                { "key": "ids", "value": "2" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Bulk Changes",
+      "item": [
+        {
+          "name": "Bulk replace by search filter",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/bulk-changes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filter\": {\"query\": \"GOVERNING LAW\"},\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Delaware\", \"occurrence\": 1}, \"new_text\": \"New York\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Bulk replace by explicit ids",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/bulk-changes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filter\": {\"ids\": [1, 2, 3]},\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"Acme Corp\", \"occurrence\": 1}, \"new_text\": \"Globex LLC\"}\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Bulk preview (no write)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/documents/bulk-changes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filter\": {\"query\": \"indemnif\"},\n  \"changes\": [\n    {\"operation\": \"replace\", \"target\": {\"text\": \"indemnify\", \"occurrence\": 1}, \"new_text\": \"hold harmless\"}\n  ],\n  \"preview\": true\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

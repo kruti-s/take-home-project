@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db import get_db
 from app.models import (
+    BulkChangeRequest,
+    BulkChangeResponse,
     DocumentCreate,
     DocumentListOut,
     DocumentOut,
@@ -13,7 +15,7 @@ from app.models import (
     PatchRequest,
     SearchResponse,
 )
-from app.services import document_service, search_service
+from app.services import bulk_service, document_service, search_service
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -32,6 +34,44 @@ def create_document(
         The newly created document, including its assigned doc_id.
     """
     return document_service.create_document(conn, body.title, body.content)
+
+
+@router.post(
+    "/bulk-changes", response_model=BulkChangeResponse, response_model_exclude_none=True
+)
+def bulk_change_documents(
+    body: BulkChangeRequest, conn: sqlite3.Connection = Depends(get_db)
+) -> BulkChangeResponse:
+    """Apply the same set of changes across many documents at once.
+
+    Documents are selected via `body.filter`: `ids` alone targets exactly
+    those documents; `query` alone targets every document matching it
+    (via the same full-text search GET /documents/search uses); given
+    together, `query` matches are restricted to `ids`. A filter is
+    required and must not be empty; there is no "apply to all documents"
+    default.
+
+    Each document is processed independently (no transaction spans
+    documents): a change that fails against one document (e.g. its
+    target text isn't found) is recorded as an error result for that
+    document without affecting the others.
+
+    Args:
+        body: The filter, the changes to apply, and whether to preview.
+        conn: SQLite connection, injected per-request.
+
+    Returns:
+        One result per document the filter resolved to — "ok" (with a
+        diff, plus a version if written) or "error" (with a message).
+    """
+    if bulk_service.is_filter_empty(body.filter):
+        raise HTTPException(
+            status_code=400,
+            detail="filter is required: provide a non-empty 'ids' list or 'query'",
+        )
+    doc_ids = bulk_service.resolve_filter_doc_ids(conn, body.filter)
+    results = bulk_service.apply_bulk_changes(conn, doc_ids, body.changes, body.preview)
+    return BulkChangeResponse(results=results)
 
 
 @router.get("", response_model=DocumentListOut)
