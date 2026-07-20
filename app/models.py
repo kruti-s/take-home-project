@@ -46,11 +46,14 @@ class ChangeTarget(BaseModel):
 
     Args:
         text: The exact substring to locate within the document.
-        occurrence: Which occurrence of `text` to target (1-indexed).
+        occurrence: Which occurrence of `text` to target — a 1-indexed
+            integer, or the string "all" to target every (non-overlapping)
+            occurrence in the document. "all" is only meaningful for
+            replace/delete (insert is position-only).
     """
 
     text: str
-    occurrence: int = 1
+    occurrence: int | Literal["all"] = 1
 
 
 class ChangeRange(BaseModel):
@@ -191,18 +194,23 @@ class BulkChangeResult(BaseModel):
 
     Args:
         id: The document's id.
-        status: "ok" or "error".
-        diff: Unified diff lines from before to after; set when status is
-            "ok".
+        status: "ok" (change applied/previewed), "skipped" (the edit target
+            wasn't present in this document — nothing to change), or "error"
+            (a genuine failure: malformed change, bad range, missing document).
+        old_content: The document's content before the change; set when
+            status is "ok". Paired with `new_content` so the client renders
+            the same word-level diff a single-document preview does.
+        new_content: The content the change produced; set when status is "ok".
         version: The new change_id recorded for this edit; set when
             status is "ok" and the change was actually written (not a
             preview).
-        message: Error description; set when status is "error".
+        message: Human-readable reason; set when status is "skipped" or "error".
     """
 
     id: int
-    status: Literal["ok", "error"]
-    diff: list[str] | None = None
+    status: Literal["ok", "skipped", "error"]
+    old_content: str | None = None
+    new_content: str | None = None
     version: int | None = None
     message: str | None = None
 

@@ -19,6 +19,18 @@ class ChangeError(ValueError):
     """
 
 
+class TargetNotFoundError(ChangeError):
+    """Raised when a text-match target simply isn't present in the document.
+
+    A subclass of ChangeError (so a single-document PATCH still treats it as
+    a 400 client error), but distinguished so bulk-changes can report it as a
+    "skipped" outcome rather than an "error": when a broad filter (e.g. an
+    FTS5 query, which matches case-insensitively and by token) selects a
+    document that doesn't contain the exact edit target, there is simply
+    nothing to change there — that's not a failure of the batch.
+    """
+
+
 def apply_range_operation(
     text: str,
     operation: Literal["insert", "replace", "delete"],
@@ -82,6 +94,7 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
         return change.range.start, change.range.end
 
     if change.target is not None:
+        # occurrence == "all" is expanded in _apply_one_change, never here.
         if change.target.occurrence < 1:
             raise ChangeError("target.occurrence must be >= 1")
         idx = -1
@@ -89,7 +102,7 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
         for _ in range(change.target.occurrence):
             idx = text.find(change.target.text, search_from)
             if idx == -1:
-                raise ChangeError(
+                raise TargetNotFoundError(
                     f"{change.target.text!r} not found "
                     f"(occurrence {change.target.occurrence})"
                 )
@@ -99,11 +112,72 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
     raise ChangeError("change must specify either 'target' or 'range'")
 
 
+def _find_all_occurrences(text: str, target: str) -> list[int]:
+    """Return the start offset of every non-overlapping occurrence of `target`.
+
+    Non-overlapping (advance past each match), matching `str.replace`
+    semantics — the natural meaning of "replace/delete all occurrences."
+
+    Args:
+        text: The text to search.
+        target: The substring to find.
+
+    Returns:
+        Start offsets, left to right. Empty if `target` never occurs (or is
+        empty).
+    """
+    if not target:
+        return []
+    positions: list[int] = []
+    i = text.find(target)
+    while i != -1:
+        positions.append(i)
+        i = text.find(target, i + len(target))
+    return positions
+
+
+def _apply_one_change(text: str, change: DocumentChange) -> str:
+    """Apply a single change to `text`, handling occurrence "all".
+
+    For a text target with `occurrence == "all"`, the operation is applied
+    to every non-overlapping occurrence, right-to-left so earlier offsets
+    don't shift as the text changes. Otherwise it's a single located edit.
+
+    Args:
+        text: The current text.
+        change: The change to apply.
+
+    Returns:
+        The text after applying the change.
+
+    Raises:
+        TargetNotFoundError: If a text target isn't present.
+        ChangeError: If the change is otherwise malformed.
+    """
+    if change.target is not None and change.target.occurrence == "all":
+        positions = _find_all_occurrences(text, change.target.text)
+        if not positions:
+            raise TargetNotFoundError(f"{change.target.text!r} not found")
+        span = len(change.target.text)
+        for start in reversed(positions):
+            text = apply_range_operation(
+                text, change.operation, start, start + span, change.new_text
+            )
+        return text
+
+    start, end = _resolve_change_location(text, change)
+    return apply_range_operation(text, change.operation, start, end, change.new_text)
+
+
 def apply_changes(text: str, changes: list[DocumentChange]) -> str:
     """Pure function that applies an ordered list of changes to text.
 
     Each change is resolved and applied against the text produced by the
-    previous change. No I/O — this only computes the resulting string.
+    previous change. No I/O — this only computes the resulting string. This
+    is the single edit engine behind both PATCH /documents/{id} and
+    POST /documents/bulk-changes (via `apply_patch_with_diff` /
+    `preview_patch`), so a bulk edit and a single-document edit resolve and
+    apply text identically — including `occurrence == "all"`.
 
     Args:
         text: The starting text.
@@ -117,8 +191,7 @@ def apply_changes(text: str, changes: list[DocumentChange]) -> str:
             be resolved against the text at that point in the sequence.
     """
     for change in changes:
-        start, end = _resolve_change_location(text, change)
-        text = apply_range_operation(text, change.operation, start, end, change.new_text)
+        text = _apply_one_change(text, change)
     return text
 
 
@@ -236,15 +309,15 @@ def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
 def apply_patch_with_diff(
     conn: sqlite3.Connection, doc_id: int, changes: list[DocumentChange]
 ) -> tuple[DocumentOut, str, int]:
-    """Apply changes to a document, write them, and report the diff and new version.
+    """Apply changes to a document, write them, and report the before-text and version.
 
     This is the single shared core behind both PATCH /documents/{id} and
     POST /documents/bulk-changes — both call this function rather than
-    reimplementing the fetch/apply/write sequence.
+    reimplementing the fetch/apply/write sequence, so a bulk edit and a
+    single-document edit are byte-for-byte the same operation.
 
-    Changes are applied sequentially: each change is resolved and applied
-    against the text produced by the previous change, all within a single
-    document (cross-document patches are not supported).
+    Changes are applied sequentially via `apply_changes` (including
+    `occurrence == "all"`), all within a single document.
 
     The FTS5 index is kept in sync automatically by the `edits_sync_fts`
     trigger (see schema.sql), which fires when `record_edit` inserts the
@@ -256,9 +329,10 @@ def apply_patch_with_diff(
         changes: Ordered list of insert/replace/delete operations to apply.
 
     Returns:
-        A `(document, diff, version)` tuple: the document after all
-        changes have been applied, a unified diff from its prior content,
-        and the new change_id recorded for this edit.
+        A `(document, old_content, version)` tuple: the document after all
+        changes have been applied, the content *before* the edit (so the
+        caller can render a diff the same way a preview does), and the new
+        change_id recorded for this edit.
 
     Raises:
         KeyError: If no document with `doc_id` exists.
@@ -266,14 +340,14 @@ def apply_patch_with_diff(
             be resolved against the current document text.
     """
     doc = get_document(conn, doc_id)
-    new_text = apply_changes(doc.content, changes)
-    diff = diff_text(doc.content, new_text)
+    old_content = doc.content
+    new_text = apply_changes(old_content, changes)
 
     conn.execute("UPDATE docs SET content = ? WHERE doc_id = ?", (new_text, doc_id))
     version = record_edit(conn, doc_id, new_text)
     conn.commit()
 
-    return DocumentOut(doc_id=doc_id, title=doc.title, content=new_text), diff, version
+    return DocumentOut(doc_id=doc_id, title=doc.title, content=new_text), old_content, version
 
 
 def apply_patch(
@@ -294,7 +368,7 @@ def apply_patch(
         ChangeError: If a change is malformed or its target/range cannot
             be resolved against the current document text.
     """
-    doc, _diff, _version = apply_patch_with_diff(conn, doc_id, changes)
+    doc, _old_content, _version = apply_patch_with_diff(conn, doc_id, changes)
     return doc
 
 

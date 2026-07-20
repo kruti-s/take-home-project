@@ -4,6 +4,7 @@ import pytest
 
 from app.models import ChangeRange, ChangeTarget, DocumentChange
 from app.services.document_service import (
+    TargetNotFoundError,
     _resolve_change_location,
     apply_changes,
     apply_range_operation,
@@ -118,3 +119,53 @@ def test_diff_text_shows_changed_lines():
 
 def test_diff_text_identical_texts_produces_empty_diff():
     assert diff_text("same", "same") == ""
+
+
+def test_apply_changes_replace_all_occurrences():
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="cat", occurrence="all"), new_text="dog"
+        )
+    ]
+    assert apply_changes("cat sat on the cat mat", changes) == "dog sat on the dog mat"
+
+
+def test_apply_changes_delete_all_occurrences():
+    changes = [
+        DocumentChange(
+            operation="delete", target=ChangeTarget(text="X ", occurrence="all"), new_text=""
+        )
+    ]
+    assert apply_changes("X a X b X c", changes) == "a b c"
+
+
+def test_apply_changes_all_when_replacement_contains_target():
+    # right-to-left, non-overlapping application means the new text is never
+    # re-scanned — no infinite loop, no double replacement.
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="cat", occurrence="all"), new_text="cats"
+        )
+    ]
+    assert apply_changes("cat cat cat", changes) == "cats cats cats"
+
+
+def test_apply_changes_all_matches_str_replace_semantics():
+    # non-overlapping, same as Python's str.replace
+    text = "aaaa"
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="aa", occurrence="all"), new_text="b"
+        )
+    ]
+    assert apply_changes(text, changes) == text.replace("aa", "b")
+
+
+def test_apply_changes_all_not_found_raises_target_not_found():
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="zzz", occurrence="all"), new_text="x"
+        )
+    ]
+    with pytest.raises(TargetNotFoundError):
+        apply_changes("nothing here", changes)

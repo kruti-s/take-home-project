@@ -1,0 +1,132 @@
+@page {
+  size: Letter;
+  margin: 0.85in 0.9in;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.5;
+  color: #24282e;
+  margin: 0;
+}
+
+.doc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 2px solid #2c4a7c;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+}
+
+.doc-header h1 {
+  font-size: 18pt;
+  margin: 0;
+  color: #16233b;
+}
+
+.doc-header .meta {
+  font-size: 9pt;
+  color: #6b7280;
+  text-align: right;
+}
+
+.subtitle {
+  font-size: 10.5pt;
+  color: #6b7280;
+  margin: 2px 0 18px;
+}
+
+h2 {
+  font-size: 12.5pt;
+  color: #2c4a7c;
+  border-bottom: 1px solid #dfe3e8;
+  padding-bottom: 3px;
+  margin-top: 22px;
+  margin-bottom: 8px;
+  page-break-after: avoid;
+}
+
+h3 {
+  font-size: 10.5pt;
+  color: #16233b;
+  margin-top: 14px;
+  margin-bottom: 4px;
+  page-break-after: avoid;
+}
+
+p { margin: 6px 0; }
+
+ul, ol { margin: 6px 0; padding-left: 20px; }
+li { margin: 3px 0; }
+
+strong { color: #16233b; }
+
+code {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 9pt;
+  background: #f1f3f6;
+  padding: 0.5px 4px;
+  border-radius: 3px;
+}
+
+pre {
+  background: #f7f8fa;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 8.5pt;
+  overflow-x: auto;
+  page-break-inside: avoid;
+}
+pre code { background: none; padding: 0; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 9.5pt;
+}
+th, td {
+  border: 1px solid #dfe3e8;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #f1f3f6; color: #16233b; }
+
+.callout {
+  background: #eaf0f9;
+  border-left: 3px solid #2c4a7c;
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+  margin: 10px 0;
+}
+
+.callout-warn {
+  background: #fbeceb;
+  border-left-color: #b3261e;
+}
+
+.two-col {
+  display: flex;
+  gap: 18px;
+}
+.two-col > div { flex: 1; }
+
+.section-block {
+  page-break-inside: avoid;
+}
+
+.footer-note {
+  margin-top: 14px;
+  padding-top: 6px;
+  border-top: 1px solid #dfe3e8;
+  font-size: 8.5pt;
+  color: #6b7280;
+  page-break-before: avoid;
+  break-inside: avoid;
+}

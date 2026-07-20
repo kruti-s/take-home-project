@@ -80,10 +80,15 @@ def apply_bulk_changes(
         preview: If true, compute diffs without writing anything.
 
     Returns:
-        One result per doc_id, in the same order: an "ok" outcome (diff,
-        plus version if written) or an "error" outcome (message) for
-        documents where a change couldn't be resolved or applied, or that
-        don't exist.
+        One result per doc_id, in the same order:
+        - "ok" — change applied/previewed (diff, plus version if written).
+        - "skipped" — the edit target text wasn't present in the document, so
+          there was nothing to change. This is the common, expected outcome
+          when a broad filter query (matched case-insensitively/by token by
+          FTS5) selects documents that don't contain the exact edit target;
+          it is not a failure.
+        - "error" — a genuine problem: a malformed change, an out-of-bounds
+          range, or a document that doesn't exist.
     """
     results: list[BulkChangeResult] = []
     for doc_id in doc_ids:
@@ -92,18 +97,27 @@ def apply_bulk_changes(
                 preview_out = document_service.preview_patch(conn, doc_id, changes)
                 results.append(
                     BulkChangeResult(
-                        id=doc_id, status="ok", diff=preview_out.diff.splitlines()
+                        id=doc_id,
+                        status="ok",
+                        old_content=preview_out.old_content,
+                        new_content=preview_out.new_content,
                     )
                 )
             else:
-                _doc, diff, version = document_service.apply_patch_with_diff(
+                doc, old_content, version = document_service.apply_patch_with_diff(
                     conn, doc_id, changes
                 )
                 results.append(
                     BulkChangeResult(
-                        id=doc_id, status="ok", diff=diff.splitlines(), version=version
+                        id=doc_id,
+                        status="ok",
+                        old_content=old_content,
+                        new_content=doc.content,
+                        version=version,
                     )
                 )
+        except document_service.TargetNotFoundError as exc:
+            results.append(BulkChangeResult(id=doc_id, status="skipped", message=str(exc)))
         except (KeyError, document_service.ChangeError) as exc:
             results.append(BulkChangeResult(id=doc_id, status="error", message=str(exc)))
     return results

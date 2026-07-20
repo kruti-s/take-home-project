@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Part II — Scoping &amp; Trade-offs Write-Up</title>
+<link rel="stylesheet" href="_pdf-style.css">
+<style>
+  @page { margin: 0.5in 0.8in; }
+  body { font-size: 9pt; line-height: 1.38; }
+  .doc-header { padding-bottom: 7px; margin-bottom: 3px; }
+  .subtitle { margin: 1px 0 10px; }
+  h2 { margin-top: 9px; margin-bottom: 5px; font-size: 11pt; }
+  li { margin: 1.5px 0; }
+  p { margin: 3px 0; }
+  ul, ol { margin: 4px 0; }
+  .callout { margin: 8px 0; padding: 6px 12px; }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <h1>Part II — Scoping &amp; Trade-offs Write-Up</h1>
+  <div class="meta">Contract Redlining &amp; Search</div>
+</div>
+
+<h2>Priorities — what we built first, and what we left out</h2>
+<p><strong>Built, in order:</strong></p>
+<ol>
+  <li><strong>Correct single-document edits</strong> — insert, replace, and delete, targeted either by exact
+  text with an occurrence number ("the 3rd 'Delaware'") or by character position. Every edit is versioned:
+  each change appends a new version rather than overwriting, so the document's history is never lost.</li>
+  <li><strong>Preview before commit</strong> — the same edit logic runs in a dry-run mode that returns the
+  before/after text without writing anything, so the UI can show an exact diff, with a separate accept step
+  to commit it. Editing binding agreements demands seeing an edit's exact effect before it's permanent; true
+  for single and bulk edits alike.</li>
+  <li><strong>Search</strong> — full-text search (indexed, not a linear scan) across all documents or scoped
+  to one, returning ranked results with highlighted snippets. How the team finds the contracts that need a
+  redline before deciding what to change.</li>
+  <li><strong>Bulk operations</strong> — for example, "swap this clause in 200 templates".
+  Documents are targeted by an explicit ID list or by the same search query used above; the edit and
+  preview/commit step reuse the single-document logic rather than duplicating it, so a bulk change behaves
+  identically to a manual edit, just applied across many documents in one request. Built last since it's
+  less crucial than the other pieces and reuses functions from them.</li>
+</ol>
+<p><strong>Deliberately left out (and why):</strong></p>
+<ul>
+  <li><strong>Word/PDF upload</strong> — contracts likely arrive as files, but I left it out because
+  importing them doesn't change the edit/search core.</li>
+  <li><strong>Undo / revert to a prior version</strong> — every edit is already stored as a version, so the
+  data to revert exists; there just isn't a button/endpoint for it yet.</li>
+  <li><strong>Fuzzy string matching</strong> — for legal edits, an exact match
+  with an explicit occurrence number is more predictable than fuzzy matching, which needs a defined tolerance
+  we'd want to validate against real contracts before shipping.</li>
+</ul>
+
+<h2>Assumptions</h2>
+<ul>
+  <li><strong>Documents are plain text</strong>, not formatted files — no Word formatting, tables, or images.
+  Fastest path to a working loop; likely not sufficient for how contracts actually arrive today.</li>
+  <li><strong>Documents are modest in size</strong> — kilobytes to a few megabytes (a contract, not a
+  100MB+ archive). This is what makes the in-memory edit approach the right call.</li>
+  <li><strong>A single redline request carries a handful to a few dozen changes</strong>, not thousands —
+  changes are applied in order against a small, bounded list.</li>
+  <li><strong>Single active editor per document</strong> — concurrent edits aren't detected; last save wins silently.</li>
+  <li><strong>An occurrence number is an acceptable way to disambiguate</strong> repeated text ("the 3rd
+  'Delaware'") rather than the tool guessing which one is meant. Assumes hundreds of documents — a team's
+  active template set, not a company-wide archive.</li>
+</ul>
+
+<h2>Open Questions — before building the next version</h2>
+<ul>
+  <li><strong>Is there specific "risky" or non-standard language to flag for?</strong> Search finds where a
+  term is — it doesn't yet judge a clause as unusual. We'd want concrete examples of what counts as risky (a
+  missing clause? non-standard wording of a standard one? an out-of-range dollar figure?) before proposing
+  how to surface it.</li>
+  <li><strong>Does confidentiality require per-client/matter access control?</strong> Determines whether "no
+  accounts / anyone can see everything" is acceptable for v2 or a blocker, and whether tenants need hard
+  data isolation.</li>
+  <li><strong>What format do contracts actually arrive in?</strong> Word with tracked changes, a scanned
+  PDF, and plain text each imply a different next step — anywhere from a straightforward import step to a
+  larger rework of the document model.</li>
+  <li><strong>How large do documents get, and how many are edited at once?</strong> Sets whether current
+  performance headroom is enough or the storage approach needs to change.</li>
+</ul>
+
+<h2>Where It Breaks</h2>
+<div class="two-col">
+<div>
+<p><strong>Against real customer data:</strong></p>
+<ul>
+  <li>Word/PDF files can't be edited or searched until converted to plain text — no import step exists today.</li>
+  <li>Formatting-dependent structure (tables, numbered-list formatting, signature images) is invisible to
+  the tool; only visible text is edited/searched.</li>
+  <li>Two people editing the same contract at once isn't detected — last write wins.</li>
+</ul>
+</div>
+<div>
+<p><strong>At scale:</strong></p>
+<ul>
+  <li>Each document loads fully into memory to edit — fine to ~10MB; a much larger document would need a
+  streaming approach.</li>
+  <li>A single SQLite database is right for one team, not for serving many teams/organizations concurrently
+  — a real but well-understood migration to a client-server database.</li>
+</ul>
+</div>
+</div>
+
+</body>
+</html>

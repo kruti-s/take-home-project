@@ -149,6 +149,24 @@ def test_patch_document_insert(client):
     assert resp.json()["content"] == "the quick fox"
 
 
+def test_patch_document_insert_with_target_rejected(client):
+    # insert is position-only; an occurrence-based target is a 422.
+    created = _create(client, content="the quick fox")
+    resp = client.patch(
+        f"/documents/{created['doc_id']}",
+        json={
+            "changes": [
+                {
+                    "operation": "insert",
+                    "target": {"text": "quick", "occurrence": 1},
+                    "new_text": "very ",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 422
+
+
 def test_patch_document_delete(client):
     created = _create(client, content="the quick brown fox")
     resp = client.patch(

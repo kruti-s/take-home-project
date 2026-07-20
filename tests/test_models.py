@@ -37,6 +37,28 @@ def test_requires_exactly_one_locator_both_set():
         )
 
 
+def test_insert_rejects_text_match_target():
+    # insert is position-only — an occurrence-based target isn't allowed.
+    with pytest.raises(ValidationError):
+        DocumentChange(
+            operation="insert",
+            target=ChangeTarget(text="foo", occurrence=1),
+            new_text="x",
+        )
+
+
+def test_replace_and_delete_still_allow_text_match_target():
+    # the insert-only restriction must not affect replace/delete.
+    replace = DocumentChange(
+        operation="replace", target=ChangeTarget(text="foo", occurrence=1), new_text="x"
+    )
+    delete = DocumentChange(
+        operation="delete", target=ChangeTarget(text="foo", occurrence=2), new_text=""
+    )
+    assert replace.target.occurrence == 1
+    assert delete.target.occurrence == 2
+
+
 def test_insert_requires_start_equals_end():
     with pytest.raises(ValidationError):
         DocumentChange(
@@ -77,3 +99,19 @@ def test_replace_requires_nonempty_new_text():
         operation="replace", range=ChangeRange(start=0, end=1), new_text="hi"
     )
     assert change.new_text == "hi"
+
+
+def test_occurrence_all_is_accepted_for_replace_and_delete():
+    r = DocumentChange(
+        operation="replace", target=ChangeTarget(text="x", occurrence="all"), new_text="y"
+    )
+    d = DocumentChange(
+        operation="delete", target=ChangeTarget(text="x", occurrence="all"), new_text=""
+    )
+    assert r.target.occurrence == "all"
+    assert d.target.occurrence == "all"
+
+
+def test_occurrence_rejects_arbitrary_strings():
+    with pytest.raises(ValidationError):
+        ChangeTarget(text="x", occurrence="first")
