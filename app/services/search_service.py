@@ -65,9 +65,11 @@ def search_document(
         Matching passages within the document, ranked by relevance.
 
     Raises:
-        KeyError: If no document with `doc_id` exists.
+        KeyError: If no live (non-deleted) document with `doc_id` exists.
     """
-    exists = conn.execute("SELECT 1 FROM docs WHERE doc_id = ?", (doc_id,)).fetchone()
+    exists = conn.execute(
+        "SELECT 1 FROM docs WHERE doc_id = ? AND deleted_at IS NULL", (doc_id,)
+    ).fetchone()
     if exists is None:
         raise KeyError(f"no document with doc_id={doc_id}")
 

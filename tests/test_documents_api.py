@@ -47,6 +47,62 @@ def test_delete_document_not_found(client):
     assert resp.status_code == 404
 
 
+def test_delete_document_excluded_from_list(client):
+    kept = _create(client, title="Kept", content="one")
+    deleted = _create(client, title="Deleted", content="two")
+    client.delete(f"/documents/{deleted['doc_id']}")
+    resp = client.get("/documents")
+    assert resp.status_code == 200
+    doc_ids = [d["doc_id"] for d in resp.json()["documents"]]
+    assert doc_ids == [kept["doc_id"]]
+
+
+def test_delete_document_excluded_from_search(client):
+    doc = _create(client, title="Lease", content="a rental contract for an apartment")
+    client.delete(f"/documents/{doc['doc_id']}")
+    resp = client.get("/documents/search", params={"q": "contract"})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+def test_delete_document_single_search_returns_404(client):
+    doc = _create(client, title="Lease", content="a rental contract")
+    client.delete(f"/documents/{doc['doc_id']}")
+    resp = client.get(f"/documents/{doc['doc_id']}/search", params={"q": "contract"})
+    assert resp.status_code == 404
+
+
+def test_delete_document_twice_returns_404(client):
+    created = _create(client)
+    assert client.delete(f"/documents/{created['doc_id']}").status_code == 204
+    assert client.delete(f"/documents/{created['doc_id']}").status_code == 404
+
+
+def test_delete_document_preserves_edit_history(client, conn):
+    created = _create(client, content="the quick brown fox")
+    doc_id = created["doc_id"]
+    client.patch(
+        f"/documents/{doc_id}",
+        json={
+            "changes": [
+                {"operation": "delete", "range": {"start": 0, "end": 4}, "new_text": ""}
+            ]
+        },
+    )
+    client.delete(f"/documents/{doc_id}")
+
+    row = conn.execute(
+        "SELECT deleted_at, content FROM docs WHERE doc_id = ?", (doc_id,)
+    ).fetchone()
+    assert row["deleted_at"] is not None
+    assert row["content"] == "quick brown fox"
+
+    edits = conn.execute(
+        "SELECT change_id FROM edits WHERE doc_id = ? ORDER BY change_id", (doc_id,)
+    ).fetchall()
+    assert [r["change_id"] for r in edits] == [1, 2]
+
+
 def test_patch_document_text_replace(client):
     created = _create(client, content="the quick brown fox")
     resp = client.patch(
@@ -231,6 +287,7 @@ def test_patch_document_records_edit_history(client, conn):
         "SELECT change_id, current_text FROM edits WHERE doc_id = ? ORDER BY change_id",
         (doc_id,),
     ).fetchall()
-    assert [r["change_id"] for r in rows] == [1, 2]
-    assert rows[0]["current_text"] == "quick brown fox"
-    assert rows[1]["current_text"] == "brown fox"
+    assert [r["change_id"] for r in rows] == [1, 2, 3]
+    assert rows[0]["current_text"] == "the quick brown fox"
+    assert rows[1]["current_text"] == "quick brown fox"
+    assert rows[2]["current_text"] == "brown fox"

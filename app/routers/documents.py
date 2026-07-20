@@ -86,7 +86,11 @@ def get_document(doc_id: int, conn: sqlite3.Connection = Depends(get_db)) -> Doc
 
 @router.delete("/{doc_id}", status_code=204)
 def delete_document(doc_id: int, conn: sqlite3.Connection = Depends(get_db)) -> None:
-    """Delete a document and its edit history.
+    """Soft-delete a document.
+
+    The document stops appearing in GET /documents, GET /documents/{id},
+    and search results, but its row and edit history are preserved (not
+    hard-deleted), so the deletion can be reverted.
 
     Args:
         doc_id: Identifier of the document to delete.

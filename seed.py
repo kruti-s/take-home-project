@@ -429,6 +429,8 @@ def reset_schema(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(
         """
+        DROP TRIGGER IF EXISTS edits_sync_fts;
+        DROP TRIGGER IF EXISTS docs_soft_delete_sync_fts;
         DROP TABLE IF EXISTS docs_fts;
         DROP TABLE IF EXISTS edits;
         DROP TABLE IF EXISTS docs;
@@ -441,12 +443,14 @@ def reset_schema(conn: sqlite3.Connection) -> None:
 def insert_contract(
     conn: sqlite3.Connection, title: str, standard_text: str, revised_text: str | None
 ) -> int:
-    """Insert one seeded contract, its edit history, and its FTS5 index entry.
+    """Insert one seeded contract and its edit history.
 
     The document's current text (`docs.content`) always matches the
     highest-`change_id` row in `edits` for that document: version 1 is the
     as-signed standard draft, and version 2 (when present) is the
-    negotiated revision with a non-standard clause.
+    negotiated revision with a non-standard clause. The FTS5 index is kept
+    in sync automatically by the `edits_sync_fts` trigger (see
+    schema.sql) as each edits row below is inserted.
 
     Args:
         conn: Open SQLite connection.
@@ -465,10 +469,6 @@ def insert_contract(
     )
     doc_id = cur.lastrowid
 
-    conn.execute(
-        "INSERT INTO docs_fts (rowid, title, content) VALUES (?, ?, ?)",
-        (doc_id, title, current_text),
-    )
     conn.execute(
         "INSERT INTO edits (doc_id, change_id, current_text) VALUES (?, 1, ?)",
         (doc_id, standard_text),

@@ -1,6 +1,7 @@
 """CRUD and patch logic for documents."""
 
 import sqlite3
+from datetime import datetime, timezone
 from typing import Literal
 
 from app.models import DocumentChange, DocumentOut
@@ -86,7 +87,11 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
 
 
 def create_document(conn: sqlite3.Connection, title: str, content: str) -> DocumentOut:
-    """Insert a new document and its matching FTS5 index entry.
+    """Insert a new document and its initial edit-history entry.
+
+    The FTS5 index is kept in sync automatically by the `edits_sync_fts`
+    trigger (see schema.sql), which fires when `record_edit` inserts the
+    initial edits row below.
 
     Args:
         conn: Open SQLite connection.
@@ -100,10 +105,7 @@ def create_document(conn: sqlite3.Connection, title: str, content: str) -> Docum
         "INSERT INTO docs (title, content) VALUES (?, ?)", (title, content)
     )
     doc_id = cur.lastrowid
-    conn.execute(
-        "INSERT INTO docs_fts (rowid, title, content) VALUES (?, ?, ?)",
-        (doc_id, title, content),
-    )
+    record_edit(conn, doc_id, content)
     conn.commit()
     return DocumentOut(doc_id=doc_id, title=title, content=content)
 
@@ -119,10 +121,11 @@ def get_document(conn: sqlite3.Connection, doc_id: int) -> DocumentOut:
         The requested document.
 
     Raises:
-        KeyError: If no document with `doc_id` exists.
+        KeyError: If no live (non-deleted) document with `doc_id` exists.
     """
     row = conn.execute(
-        "SELECT doc_id, title, content FROM docs WHERE doc_id = ?", (doc_id,)
+        "SELECT doc_id, title, content FROM docs WHERE doc_id = ? AND deleted_at IS NULL",
+        (doc_id,),
     ).fetchone()
     if row is None:
         raise KeyError(f"no document with doc_id={doc_id}")
@@ -130,16 +133,17 @@ def get_document(conn: sqlite3.Connection, doc_id: int) -> DocumentOut:
 
 
 def list_documents(conn: sqlite3.Connection) -> list[DocumentOut]:
-    """Fetch all documents in the store.
+    """Fetch all non-deleted documents in the store.
 
     Args:
         conn: Open SQLite connection.
 
     Returns:
-        All documents, ordered by doc_id.
+        All live documents, ordered by doc_id. Soft-deleted documents are
+        excluded.
     """
     rows = conn.execute(
-        "SELECT doc_id, title, content FROM docs ORDER BY doc_id"
+        "SELECT doc_id, title, content FROM docs WHERE deleted_at IS NULL ORDER BY doc_id"
     ).fetchall()
     return [
         DocumentOut(doc_id=row["doc_id"], title=row["title"], content=row["content"])
@@ -148,26 +152,27 @@ def list_documents(conn: sqlite3.Connection) -> list[DocumentOut]:
 
 
 def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
-    """Delete a document, its edit history, and its FTS5 index entry.
+    """Soft-delete a document: hide it from reads/search, but keep its row
+    and edit history intact so the deletion can be reverted.
+
+    The FTS5 index is kept in sync automatically by the
+    `docs_soft_delete_sync_fts` trigger (see schema.sql), which removes
+    the document from the index when `deleted_at` is set below.
 
     Args:
         conn: Open SQLite connection.
         doc_id: Identifier of the document to delete.
 
     Raises:
-        KeyError: If no document with `doc_id` exists.
+        KeyError: If no live (non-deleted) document with `doc_id` exists.
     """
-    row = conn.execute(
-        "SELECT title, content FROM docs WHERE doc_id = ?", (doc_id,)
-    ).fetchone()
-    if row is None:
-        raise KeyError(f"no document with doc_id={doc_id}")
-
-    conn.execute("DELETE FROM docs WHERE doc_id = ?", (doc_id,))
-    conn.execute(
-        "INSERT INTO docs_fts (docs_fts, rowid, title, content) VALUES ('delete', ?, ?, ?)",
-        (doc_id, row["title"], row["content"]),
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        "UPDATE docs SET deleted_at = ? WHERE doc_id = ? AND deleted_at IS NULL",
+        (deleted_at, doc_id),
     )
+    if cur.rowcount == 0:
+        raise KeyError(f"no document with doc_id={doc_id}")
     conn.commit()
 
 
@@ -179,6 +184,10 @@ def apply_patch(
     Changes are applied sequentially: each change is resolved and applied
     against the text produced by the previous change, all within a single
     document (cross-document patches are not supported).
+
+    The FTS5 index is kept in sync automatically by the `edits_sync_fts`
+    trigger (see schema.sql), which fires when `record_edit` inserts the
+    new edits row below.
 
     Args:
         conn: Open SQLite connection.
@@ -194,22 +203,13 @@ def apply_patch(
             resolved against the current document text.
     """
     doc = get_document(conn, doc_id)
-    old_content = doc.content
-    text = old_content
+    text = doc.content
 
     for change in changes:
         start, end = _resolve_change_location(text, change)
         text = apply_range_operation(text, change.operation, start, end, change.new_text)
 
     conn.execute("UPDATE docs SET content = ? WHERE doc_id = ?", (text, doc_id))
-    conn.execute(
-        "INSERT INTO docs_fts (docs_fts, rowid, title, content) VALUES ('delete', ?, ?, ?)",
-        (doc_id, doc.title, old_content),
-    )
-    conn.execute(
-        "INSERT INTO docs_fts (rowid, title, content) VALUES (?, ?, ?)",
-        (doc_id, doc.title, text),
-    )
     record_edit(conn, doc_id, text)
     conn.commit()
 
