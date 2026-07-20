@@ -2,9 +2,9 @@
 
 import sqlite3
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.db import get_connection
+from app.db import get_db
 from app.models import (
     DocumentCreate,
     DocumentListOut,
@@ -12,29 +12,29 @@ from app.models import (
     PatchRequest,
     SearchResponse,
 )
+from app.services import document_service, search_service
+
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-@router.post("", response_model=DocumentOut)
+@router.post("", response_model=DocumentOut, status_code=201)
 def create_document(
-    body: DocumentCreate, conn: sqlite3.Connection = Depends(get_connection)
+    body: DocumentCreate, conn: sqlite3.Connection = Depends(get_db)
 ) -> DocumentOut:
     """Create a new document.
 
     Args:
-        body: The document content to store.
+        body: The document title and content to store.
         conn: SQLite connection, injected per-request.
 
     Returns:
         The newly created document, including its assigned doc_id.
     """
-    raise NotImplementedError
+    return document_service.create_document(conn, body.title, body.content)
 
 
 @router.get("", response_model=DocumentListOut)
-def list_documents(
-    conn: sqlite3.Connection = Depends(get_connection),
-) -> DocumentListOut:
+def list_documents(conn: sqlite3.Connection = Depends(get_db)) -> DocumentListOut:
     """List all documents in the store.
 
     Args:
@@ -43,7 +43,7 @@ def list_documents(
     Returns:
         All documents currently stored.
     """
-    raise NotImplementedError
+    return DocumentListOut(documents=document_service.list_documents(conn))
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -51,7 +51,7 @@ def search_documents(
     q: str = Query(..., description="Search query"),
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    conn: sqlite3.Connection = Depends(get_connection),
+    conn: sqlite3.Connection = Depends(get_db),
 ) -> SearchResponse:
     """Full-text search across all documents.
 
@@ -64,13 +64,11 @@ def search_documents(
     Returns:
         Matching documents ranked by relevance.
     """
-    raise NotImplementedError
+    return search_service.search_all(conn, q, limit, offset)
 
 
 @router.get("/{doc_id}", response_model=DocumentOut)
-def get_document(
-    doc_id: int, conn: sqlite3.Connection = Depends(get_connection)
-) -> DocumentOut:
+def get_document(doc_id: int, conn: sqlite3.Connection = Depends(get_db)) -> DocumentOut:
     """Fetch a single document by id.
 
     Args:
@@ -80,27 +78,31 @@ def get_document(
     Returns:
         The requested document.
     """
-    raise NotImplementedError
+    try:
+        return document_service.get_document(conn, doc_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/{doc_id}", status_code=204)
-def delete_document(
-    doc_id: int, conn: sqlite3.Connection = Depends(get_connection)
-) -> None:
+def delete_document(doc_id: int, conn: sqlite3.Connection = Depends(get_db)) -> None:
     """Delete a document and its edit history.
 
     Args:
         doc_id: Identifier of the document to delete.
         conn: SQLite connection, injected per-request.
     """
-    raise NotImplementedError
+    try:
+        document_service.delete_document(conn, doc_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.patch("/{doc_id}", response_model=DocumentOut)
 def patch_document(
     doc_id: int,
     body: PatchRequest,
-    conn: sqlite3.Connection = Depends(get_connection),
+    conn: sqlite3.Connection = Depends(get_db),
 ) -> DocumentOut:
     """Apply one or more changes to a document.
 
@@ -117,7 +119,12 @@ def patch_document(
     Returns:
         The document after all changes have been applied.
     """
-    raise NotImplementedError
+    try:
+        return document_service.apply_patch(conn, doc_id, body.changes)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{doc_id}/search", response_model=SearchResponse)
@@ -126,7 +133,7 @@ def search_document(
     q: str = Query(..., description="Search query"),
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    conn: sqlite3.Connection = Depends(get_connection),
+    conn: sqlite3.Connection = Depends(get_db),
 ) -> SearchResponse:
     """Full-text search restricted to a single document.
 
@@ -140,4 +147,7 @@ def search_document(
     Returns:
         Matching passages within the document, ranked by relevance.
     """
-    raise NotImplementedError
+    try:
+        return search_service.search_document(conn, doc_id, q, limit, offset)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

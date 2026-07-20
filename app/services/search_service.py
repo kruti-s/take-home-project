@@ -1,8 +1,30 @@
-"""FTS5-backed search logic. Not yet implemented."""
+"""FTS5-backed search logic."""
 
 import sqlite3
 
-from app.models import SearchResponse
+from app.models import SearchResponse, SearchResultItem
+
+# docs_fts columns: 0 = title, 1 = content. MATCH with no column filter
+# searches both; snippet() targets content (column 1).
+_SEARCH_ALL_SQL = """
+    SELECT docs_fts.rowid AS doc_id,
+           snippet(docs_fts, 1, '[', ']', '...', 8) AS snippet,
+           bm25(docs_fts) AS rank
+    FROM docs_fts
+    WHERE docs_fts MATCH ?
+    ORDER BY rank
+    LIMIT ? OFFSET ?
+"""
+
+_SEARCH_ONE_SQL = """
+    SELECT docs_fts.rowid AS doc_id,
+           snippet(docs_fts, 1, '[', ']', '...', 8) AS snippet,
+           bm25(docs_fts) AS rank
+    FROM docs_fts
+    WHERE docs_fts MATCH ? AND docs_fts.rowid = ?
+    ORDER BY rank
+    LIMIT ? OFFSET ?
+"""
 
 
 def search_all(
@@ -17,9 +39,14 @@ def search_all(
         offset: Number of results to skip, for pagination.
 
     Returns:
-        Matching documents ranked by relevance.
+        Matching documents ranked by relevance (best first).
     """
-    raise NotImplementedError
+    rows = conn.execute(_SEARCH_ALL_SQL, (query, limit, offset)).fetchall()
+    results = [
+        SearchResultItem(doc_id=row["doc_id"], snippet=row["snippet"], rank=row["rank"])
+        for row in rows
+    ]
+    return SearchResponse(results=results, limit=limit, offset=offset)
 
 
 def search_document(
@@ -40,4 +67,13 @@ def search_document(
     Raises:
         KeyError: If no document with `doc_id` exists.
     """
-    raise NotImplementedError
+    exists = conn.execute("SELECT 1 FROM docs WHERE doc_id = ?", (doc_id,)).fetchone()
+    if exists is None:
+        raise KeyError(f"no document with doc_id={doc_id}")
+
+    rows = conn.execute(_SEARCH_ONE_SQL, (query, doc_id, limit, offset)).fetchall()
+    results = [
+        SearchResultItem(doc_id=row["doc_id"], snippet=row["snippet"], rank=row["rank"])
+        for row in rows
+    ]
+    return SearchResponse(results=results, limit=limit, offset=offset)

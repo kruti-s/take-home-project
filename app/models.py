@@ -2,16 +2,18 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class DocumentCreate(BaseModel):
     """Request body for creating a new document.
 
     Args:
+        title: The document's title.
         content: The full text content of the document.
     """
 
+    title: str
     content: str
 
 
@@ -20,10 +22,12 @@ class DocumentOut(BaseModel):
 
     Args:
         doc_id: Unique identifier of the document.
+        title: The document's title.
         content: The document's current full text content.
     """
 
     doc_id: int
+    title: str
     content: str
 
 
@@ -64,9 +68,8 @@ class ChangeRange(BaseModel):
 class DocumentChange(BaseModel):
     """A single edit operation to apply to a document.
 
-    Exactly one of `target` or `range` should be provided to locate the
-    edit; `replacement`/`text` supplies the new content depending on
-    `operation`.
+    Exactly one of `target` (text-match based) or `range` (position based)
+    must be provided to locate the edit.
 
     Args:
         operation: One of "replace", "insert", or "delete".
@@ -74,15 +77,20 @@ class DocumentChange(BaseModel):
             with `range`).
         range: Position-based location for the change (mutually exclusive
             with `target`).
-        replacement: New text to substitute in for a "replace" operation.
-        text: New text to insert for an "insert" operation.
+        new_text: The new content. Used as the replacement for "replace",
+            the inserted text for "insert", and left as "" for "delete".
     """
 
     operation: Literal["replace", "insert", "delete"]
     target: ChangeTarget | None = None
     range: ChangeRange | None = None
-    replacement: str | None = None
-    text: str | None = None
+    new_text: str = ""
+
+    @model_validator(mode="after")
+    def _check_exactly_one_locator(self) -> "DocumentChange":
+        if (self.target is None) == (self.range is None):
+            raise ValueError("exactly one of 'target' or 'range' must be set")
+        return self
 
 
 class PatchRequest(BaseModel):

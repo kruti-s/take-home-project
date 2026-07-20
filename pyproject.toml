@@ -1,5 +1,5 @@
 [project]
-name = "sandstone"
+name = "assessment"
 version = "0.1.0"
 description = "Document store with SQLite persistence, FTS5 search, and edit-history tracking."
 requires-python = ">=3.11"

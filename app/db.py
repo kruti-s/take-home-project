@@ -1,10 +1,11 @@
 """SQLite connection management and schema bootstrap."""
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "sandstone.db"
+DEFAULT_DB_PATH = Path(__file__).parent.parent / "assessment.db"
 
 
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -12,7 +13,7 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
     Args:
         db_path: Filesystem path to the SQLite database file. Defaults to
-            `sandstone.db` in the project root.
+            `assessment.db` in the project root.
 
     Returns:
         A `sqlite3.Connection` with foreign key enforcement enabled and
@@ -33,3 +34,17 @@ def init_db(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(SCHEMA_PATH.read_text())
     conn.commit()
+
+
+def get_db() -> Iterator[sqlite3.Connection]:
+    """FastAPI dependency that yields a request-scoped SQLite connection.
+
+    Yields:
+        An open SQLite connection, closed automatically once the request
+        handling completes.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()

@@ -1,6 +1,7 @@
 -- Documents table: current content lives here, one row per document.
 CREATE TABLE IF NOT EXISTS docs (
     doc_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
     content TEXT NOT NULL
 );
 
@@ -14,8 +15,9 @@ CREATE TABLE IF NOT EXISTS edits (
     FOREIGN KEY (doc_id) REFERENCES docs(doc_id) ON DELETE CASCADE
 );
 
--- FTS5 external-content index over docs.content, keyed by docs.doc_id.
+-- FTS5 external-content index over docs.title and docs.content, keyed by docs.doc_id.
 CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
+    title,
     content,
     content='docs',
     content_rowid='doc_id'
