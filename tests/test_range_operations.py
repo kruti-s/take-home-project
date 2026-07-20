@@ -5,7 +5,9 @@ import pytest
 from app.models import ChangeRange, ChangeTarget, DocumentChange
 from app.services.document_service import (
     _resolve_change_location,
+    apply_changes,
     apply_range_operation,
+    diff_text,
 )
 
 
@@ -80,3 +82,39 @@ def test_resolve_change_location_missing_occurrence_raises():
     )
     with pytest.raises(ValueError):
         _resolve_change_location("the cat sat", change)
+
+
+def test_apply_changes_applies_multiple_changes_in_order():
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="quick", occurrence=1), new_text="slow"
+        ),
+        DocumentChange(
+            operation="delete", target=ChangeTarget(text="brown ", occurrence=1), new_text=""
+        ),
+    ]
+    assert apply_changes("the quick brown fox", changes) == "the slow fox"
+
+
+def test_apply_changes_empty_list_returns_text_unchanged():
+    assert apply_changes("hello", []) == "hello"
+
+
+def test_apply_changes_raises_on_bad_target():
+    changes = [
+        DocumentChange(
+            operation="replace", target=ChangeTarget(text="nope", occurrence=1), new_text="x"
+        )
+    ]
+    with pytest.raises(ValueError):
+        apply_changes("hello", changes)
+
+
+def test_diff_text_shows_changed_lines():
+    diff = diff_text("the quick brown fox", "the slow brown fox")
+    assert "-the quick brown fox" in diff
+    assert "+the slow brown fox" in diff
+
+
+def test_diff_text_identical_texts_produces_empty_diff():
+    assert diff_text("same", "same") == ""

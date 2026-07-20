@@ -1,10 +1,11 @@
 """CRUD and patch logic for documents."""
 
+import difflib
 import sqlite3
 from datetime import datetime, timezone
 from typing import Literal
 
-from app.models import DocumentChange, DocumentOut
+from app.models import DocumentChange, DocumentOut, PatchPreviewOut
 
 
 def apply_range_operation(
@@ -84,6 +85,50 @@ def _resolve_change_location(text: str, change: DocumentChange) -> tuple[int, in
         return idx, idx + len(change.target.text)
 
     raise ValueError("change must specify either 'target' or 'range'")
+
+
+def apply_changes(text: str, changes: list[DocumentChange]) -> str:
+    """Pure function that applies an ordered list of changes to text.
+
+    Each change is resolved and applied against the text produced by the
+    previous change. No I/O — this only computes the resulting string.
+
+    Args:
+        text: The starting text.
+        changes: Ordered list of insert/replace/delete operations to apply.
+
+    Returns:
+        The text after all changes have been applied.
+
+    Raises:
+        ValueError: If a change is malformed or its target/range cannot be
+            resolved against the text at that point in the sequence.
+    """
+    for change in changes:
+        start, end = _resolve_change_location(text, change)
+        text = apply_range_operation(text, change.operation, start, end, change.new_text)
+    return text
+
+
+def diff_text(old_text: str, new_text: str) -> str:
+    """Pure function that computes a unified diff between two texts.
+
+    Args:
+        old_text: The "before" text.
+        new_text: The "after" text.
+
+    Returns:
+        A unified diff (as produced by `difflib.unified_diff`) from
+        `old_text` to `new_text`.
+    """
+    return "".join(
+        difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile="before",
+            tofile="after",
+        )
+    )
 
 
 def create_document(conn: sqlite3.Connection, title: str, content: str) -> DocumentOut:
@@ -203,17 +248,45 @@ def apply_patch(
             resolved against the current document text.
     """
     doc = get_document(conn, doc_id)
-    text = doc.content
-
-    for change in changes:
-        start, end = _resolve_change_location(text, change)
-        text = apply_range_operation(text, change.operation, start, end, change.new_text)
+    text = apply_changes(doc.content, changes)
 
     conn.execute("UPDATE docs SET content = ? WHERE doc_id = ?", (text, doc_id))
     record_edit(conn, doc_id, text)
     conn.commit()
 
     return DocumentOut(doc_id=doc_id, title=doc.title, content=text)
+
+
+def preview_patch(
+    conn: sqlite3.Connection, doc_id: int, changes: list[DocumentChange]
+) -> PatchPreviewOut:
+    """Compute what applying changes to a document would produce, without writing.
+
+    Nothing is persisted: no `docs` update, no new `edits` row, no FTS
+    re-index.
+
+    Args:
+        conn: Open SQLite connection.
+        doc_id: Identifier of the document to preview a patch against.
+        changes: Ordered list of insert/replace/delete operations to apply.
+
+    Returns:
+        The document's current content, the content the patch would
+        produce, and a unified diff between the two.
+
+    Raises:
+        KeyError: If no document with `doc_id` exists.
+        ValueError: If a change is malformed or its target/range cannot be
+            resolved against the current document text.
+    """
+    doc = get_document(conn, doc_id)
+    new_text = apply_changes(doc.content, changes)
+    return PatchPreviewOut(
+        doc_id=doc_id,
+        old_content=doc.content,
+        new_content=new_text,
+        diff=diff_text(doc.content, new_text),
+    )
 
 
 def record_edit(conn: sqlite3.Connection, doc_id: int, current_text: str) -> int:

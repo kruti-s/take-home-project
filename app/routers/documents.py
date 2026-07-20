@@ -9,6 +9,7 @@ from app.models import (
     DocumentCreate,
     DocumentListOut,
     DocumentOut,
+    PatchPreviewOut,
     PatchRequest,
     SearchResponse,
 )
@@ -102,28 +103,34 @@ def delete_document(doc_id: int, conn: sqlite3.Connection = Depends(get_db)) -> 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.patch("/{doc_id}", response_model=DocumentOut)
+@router.patch("/{doc_id}")
 def patch_document(
     doc_id: int,
     body: PatchRequest,
     conn: sqlite3.Connection = Depends(get_db),
-) -> DocumentOut:
-    """Apply one or more changes to a document.
+) -> DocumentOut | PatchPreviewOut:
+    """Apply one or more changes to a document, or preview them.
 
     Each change is either text-match based (`target`: text + occurrence)
     or position based (`range`: start/end offset), and applies an
     "insert", "replace", or "delete" operation. Applying the patch records
     a new entry in the document's edit history.
 
+    If `body.preview` is true, nothing is written — the changes are
+    computed and returned as a diff instead.
+
     Args:
         doc_id: Identifier of the document to patch.
-        body: The ordered list of changes to apply.
+        body: The ordered list of changes to apply, and whether to preview.
         conn: SQLite connection, injected per-request.
 
     Returns:
-        The document after all changes have been applied.
+        The document after all changes have been applied, or (if
+        `body.preview` is true) a diff of what would have changed.
     """
     try:
+        if body.preview:
+            return document_service.preview_patch(conn, doc_id, body.changes)
         return document_service.apply_patch(conn, doc_id, body.changes)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -113,9 +113,28 @@ class PatchRequest(BaseModel):
 
     Args:
         changes: Ordered list of changes to apply to the document.
+        preview: If true, compute and return the resulting diff without
+            writing anything — no document update, no new edits row.
     """
 
     changes: list[DocumentChange]
+    preview: bool = False
+
+
+class PatchPreviewOut(BaseModel):
+    """Response body for PATCH /documents/{id} when `preview` is true.
+
+    Args:
+        doc_id: Identifier of the document that would be patched.
+        old_content: The document's content before the patch.
+        new_content: The content the patch would produce, if applied.
+        diff: A unified diff from `old_content` to `new_content`.
+    """
+
+    doc_id: int
+    old_content: str
+    new_content: str
+    diff: str
 
 
 class SearchResultItem(BaseModel):

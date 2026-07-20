@@ -291,3 +291,84 @@ def test_patch_document_records_edit_history(client, conn):
     assert rows[0]["current_text"] == "the quick brown fox"
     assert rows[1]["current_text"] == "quick brown fox"
     assert rows[2]["current_text"] == "brown fox"
+
+
+def test_patch_preview_returns_diff_without_writing(client, conn):
+    created = _create(client, content="the quick brown fox")
+    doc_id = created["doc_id"]
+
+    resp = client.patch(
+        f"/documents/{doc_id}",
+        json={
+            "changes": [
+                {
+                    "operation": "replace",
+                    "target": {"text": "quick", "occurrence": 1},
+                    "new_text": "slow",
+                }
+            ],
+            "preview": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["doc_id"] == doc_id
+    assert body["old_content"] == "the quick brown fox"
+    assert body["new_content"] == "the slow brown fox"
+    assert "-the quick brown fox" in body["diff"]
+    assert "+the slow brown fox" in body["diff"]
+
+    # nothing was written: doc content and edit history are unchanged
+    assert client.get(f"/documents/{doc_id}").json()["content"] == "the quick brown fox"
+    edits = conn.execute(
+        "SELECT change_id FROM edits WHERE doc_id = ?", (doc_id,)
+    ).fetchall()
+    assert [r["change_id"] for r in edits] == [1]
+
+
+def test_patch_preview_not_found(client):
+    resp = client.patch(
+        "/documents/999",
+        json={
+            "changes": [{"operation": "delete", "range": {"start": 0, "end": 1}}],
+            "preview": True,
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_patch_preview_bad_target_returns_400(client):
+    created = _create(client, content="the quick brown fox")
+    resp = client.patch(
+        f"/documents/{created['doc_id']}",
+        json={
+            "changes": [
+                {
+                    "operation": "replace",
+                    "target": {"text": "nonexistent", "occurrence": 1},
+                    "new_text": "x",
+                }
+            ],
+            "preview": True,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_patch_preview_excludes_from_search(client):
+    doc = _create(client, title="Lease", content="a rental contract about apples")
+    client.patch(
+        f"/documents/{doc['doc_id']}",
+        json={
+            "changes": [
+                {
+                    "operation": "replace",
+                    "target": {"text": "apples", "occurrence": 1},
+                    "new_text": "bananas",
+                }
+            ],
+            "preview": True,
+        },
+    )
+    resp = client.get("/documents/search", params={"q": "bananas"})
+    assert resp.json()["results"] == []
