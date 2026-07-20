@@ -240,73 +240,59 @@ suite includes tests against a **10MB synthetic document**
   single-line change.
 
 **Search does not scan document text at request time.** It's backed by
-SQLite's FTS5 extension — an inverted index maintained automatically by
-SQL triggers (`app/schema.sql`) every time a document's content changes.
-A search is an index lookup + BM25 ranking, not a linear scan of every
-document's text, so search latency is a function of the number of
-*matching terms*, not the number or size of documents in the store. This
-was chosen over hand-rolling an in-memory inverted index because FTS5 is
-built into SQLite (zero extra dependency), is transactionally consistent
-with writes (triggers, not an out-of-band reindex job), persists across
-restarts for free, and already implements tokenization, ranking (BM25),
-and snippet extraction — reimplementing those well is a project in itself.
-The trade-off: it's SQLite-specific (a move to Postgres would mean
-swapping to `tsvector`/`pg_trgm`, not a pure port) and, being disk-backed,
-is not quite as fast as a hand-tuned in-memory hash index for a small,
-static corpus — a difference that doesn't matter at hundreds-of-documents
-scale and does matter if this needed to become a low-single-digit-millisecond
-search-as-you-type experience over millions of documents.
+SQLite's FTS5 extension — an inverted index kept in sync by SQL triggers
+(`app/schema.sql`) on every content change. A search is an index lookup +
+BM25 ranking, not a linear scan, so latency scales with matching terms,
+not with the number or size of stored documents. FTS5 was chosen over a
+hand-rolled in-memory index because it's built into SQLite (no extra
+dependency), stays transactionally consistent with writes via triggers
+rather than an out-of-band reindex, persists across restarts for free,
+and already handles tokenization, BM25 ranking, and snippets. Trade-off:
+it's SQLite-specific (a Postgres move means `tsvector`/`pg_trgm`, not a
+port) and, being disk-backed, is slightly slower than a hand-tuned
+in-memory index — irrelevant at hundreds-of-documents scale, relevant only
+if this needed sub-millisecond search-as-you-type over millions of docs.
 
 ## API design rationale
 
 **Resource-based REST, with one deliberate escape hatch.** `/documents` is
-a standard CRUD resource (`POST`/`GET`/`DELETE`), and editing is `PATCH`
-(partial update) rather than `PUT` — a redline is a set of targeted
-changes, not a full-document replacement, and `PATCH`'s semantics match
-that directly. `GET /documents/search` is a read, so it's a `GET` with
-query parameters, not a `POST` — cacheable, bookmarkable, safe to retry.
+standard CRUD (`POST`/`GET`/`DELETE`); editing is `PATCH`, not `PUT`,
+since a redline is a set of targeted changes rather than a full-document
+replacement. `GET /documents/search` stays a `GET` with query params
+(cacheable, bookmarkable, safe to retry) rather than a `POST`.
 
 The one non-resource endpoint is `POST /documents/bulk-changes` —
-deliberately action-based rather than, say, `PATCH /documents?filter=...`.
-A bulk edit is not idempotent-if-repeated in the way a single resource
-`PATCH` implies, it returns a heterogeneous per-document result set (some
-succeed, some fail) rather than a single updated resource, and cramming
-"apply this edit to a filtered set" into REST's resource model would be
-forcing a workflow into a shape it doesn't fit. Precedent for this pattern
-(action endpoints alongside resource CRUD) is common in mature REST APIs
-handling bulk/batch operations.
+deliberately action-based rather than `PATCH /documents?filter=...`. A
+bulk edit isn't idempotent the way a resource `PATCH` implies, and it
+returns a heterogeneous per-document result set (some succeed, some fail)
+rather than one updated resource — forcing that into REST's resource
+model would fit the workflow poorly. Action endpoints alongside resource
+CRUD are a common pattern in REST APIs for bulk operations.
 
-**Preview is a request flag, not a separate endpoint or a two-phase
-commit.** `PATCH .../{id}` and `POST .../bulk-changes` both take a
-`"preview": true` flag that returns the would-be diff and writes nothing.
-The alternative — a separate `POST .../preview` endpoint — would duplicate
-the entire resolve/apply/diff pipeline behind a second route for no real
-benefit; a flag on the same endpoint guarantees preview and commit run the
-*exact same* resolution logic, so what you previewed is guaranteed to be
-what you'd get.
+**Preview is a request flag, not a separate endpoint.** `PATCH .../{id}`
+and `POST .../bulk-changes` both accept `"preview": true`, returning the
+would-be diff and writing nothing. A separate `POST .../preview` endpoint
+would duplicate the whole resolve/apply/diff pipeline for no benefit; a
+flag guarantees preview and commit run the exact same resolution logic, so
+what you previewed is what you get.
 
 **Occurrence numbers over "smartest guess" matching.** When target text
 appears multiple times, the API requires an explicit 1-indexed
-`occurrence` rather than silently picking "the first" or trying to infer
-intent. For a legal tool, a silent wrong guess (editing the wrong
-occurrence of a defined term) is much worse than requiring one extra field
-in the request.
+`occurrence` rather than silently picking "the first." For a legal tool, a
+silent wrong guess is worse than one extra required field.
 
-**Errors: 4xx from the framework's validation, a matching JSON shape only
-where the spec's contract needs it.** FastAPI/Pydantic already produce
-well-formed `{"detail": ...}` 4xx bodies for validation failures and route
-handlers raise `HTTPException` with the same shape for domain errors
-(document not found, unresolvable edit) — reinventing that would be pure
-overhead. The one place a custom body was needed is unhandled 5xxs, which
-get a top-level exception handler enforcing `{"error": str, "code": 500}`
-and logging server-side instead of leaking a stack trace.
+**Errors: framework defaults, with a custom shape only where needed.**
+FastAPI/Pydantic already produce well-formed `{"detail": ...}` 4xx bodies
+for validation and domain errors (`HTTPException`) — no need to reinvent
+that. The one custom case is unhandled 5xxs, which get a top-level handler
+enforcing `{"error": str, "code": 500}` and server-side logging instead of
+a leaked stack trace.
 
 **Versioning via an append-only edit log, not in-place mutation.** Every
-committed `PATCH` inserts a new row into an `edits` table (full
-snapshot per version) rather than overwriting document content directly;
-`docs.content` is a cached pointer to the latest version, kept in sync by
-the same code path that writes `edits`. This means every change is
-individually auditable and nothing is ever silently lost — appropriate for
-a legal-document tool where "what did this clause say before" is a
-real question, not a nice-to-have.
+committed `PATCH` inserts a new row into an `edits` table (full snapshot
+per version) instead of overwriting content; `docs.content` is a cached
+pointer to the latest version, kept in sync by the same write path. Every
+change is individually auditable and nothing is silently lost — important
+for a legal tool where "what did this clause say before" is a real
+question.
 
