@@ -4,76 +4,77 @@ import sqlite3
 
 from app.models import SearchResponse, SearchResultItem
 
-# docs_fts columns: 0 = title, 1 = content. MATCH with no column filter
-# searches both; snippet() targets content (column 1).
-_SEARCH_ALL_SQL = """
-    SELECT docs_fts.rowid AS doc_id,
-           snippet(docs_fts, 1, '[', ']', '...', 8) AS snippet,
-           bm25(docs_fts) AS rank
-    FROM docs_fts
-    WHERE docs_fts MATCH ?
-    ORDER BY rank
-    LIMIT ? OFFSET ?
-"""
-
-_SEARCH_ONE_SQL = """
-    SELECT docs_fts.rowid AS doc_id,
-           snippet(docs_fts, 1, '[', ']', '...', 8) AS snippet,
-           bm25(docs_fts) AS rank
-    FROM docs_fts
-    WHERE docs_fts MATCH ? AND docs_fts.rowid = ?
-    ORDER BY rank
-    LIMIT ? OFFSET ?
-"""
+# docs_fts columns: 0 = title, 1 = content. Snippets are drawn from
+# content (column 1) — MATCH itself still searches both columns.
+_CONTENT_COLUMN = 1
 
 
-def search_all(
-    conn: sqlite3.Connection, query: str, limit: int, offset: int
+def _quote_fts5_query(query: str) -> str:
+    """Turn raw user input into a safe FTS5 phrase-query literal.
+
+    FTS5's MATCH syntax treats `"`, `*`, `-`, `^`, `:`, and bareword
+    operators (AND/OR/NOT/NEAR) specially. Wrapping the whole input in
+    double quotes forces it to be parsed as a single literal phrase, so
+    none of those characters are interpreted as query syntax — the query
+    is bound as a parameter (never string-concatenated into SQL), and this
+    quoting neutralizes FTS5's *own* query-language operators within that
+    parameter's value.
+
+    Args:
+        query: The raw, untrusted search string from the client.
+
+    Returns:
+        `query`, with any embedded `"` doubled (FTS5's escape for a
+        literal quote) and the whole string wrapped in `"..."`.
+    """
+    return '"' + query.replace('"', '""') + '"'
+
+
+def search_documents(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int,
+    offset: int,
+    ids: list[int] | None = None,
 ) -> SearchResponse:
-    """Full-text search across all documents.
+    """Full-text search across documents, optionally restricted to specific ids.
 
     Args:
         conn: Open SQLite connection.
-        query: FTS5 match expression to search for.
+        query: Raw search string to look for.
         limit: Maximum number of results to return.
         offset: Number of results to skip, for pagination.
+        ids: If given, only search within these document ids.
 
     Returns:
         Matching documents ranked by relevance (best first).
-    """
-    rows = conn.execute(_SEARCH_ALL_SQL, (query, limit, offset)).fetchall()
-    results = [
-        SearchResultItem(doc_id=row["doc_id"], snippet=row["snippet"], rank=row["rank"])
-        for row in rows
-    ]
-    return SearchResponse(results=results, limit=limit, offset=offset)
-
-
-def search_document(
-    conn: sqlite3.Connection, doc_id: int, query: str, limit: int, offset: int
-) -> SearchResponse:
-    """Full-text search restricted to a single document.
-
-    Args:
-        conn: Open SQLite connection.
-        doc_id: Identifier of the document to search within.
-        query: FTS5 match expression to search for.
-        limit: Maximum number of results to return.
-        offset: Number of results to skip, for pagination.
-
-    Returns:
-        Matching passages within the document, ranked by relevance.
 
     Raises:
-        KeyError: If no live (non-deleted) document with `doc_id` exists.
+        ValueError: If `query` can't be parsed as an FTS5 query.
     """
-    exists = conn.execute(
-        "SELECT 1 FROM docs WHERE doc_id = ? AND deleted_at IS NULL", (doc_id,)
-    ).fetchone()
-    if exists is None:
-        raise KeyError(f"no document with doc_id={doc_id}")
+    sql = [
+        "SELECT docs_fts.rowid AS doc_id,",
+        f"       snippet(docs_fts, {_CONTENT_COLUMN}, '<mark>', '</mark>', '…', 30) AS snippet,",
+        "       bm25(docs_fts) AS rank",
+        "FROM docs_fts",
+        "WHERE docs_fts MATCH ?",
+    ]
+    params: list[str | int] = [_quote_fts5_query(query)]
 
-    rows = conn.execute(_SEARCH_ONE_SQL, (query, doc_id, limit, offset)).fetchall()
+    if ids:
+        placeholders = ", ".join("?" for _ in ids)
+        sql.append(f"AND docs_fts.rowid IN ({placeholders})")
+        params.extend(ids)
+
+    sql.append("ORDER BY rank")
+    sql.append("LIMIT ? OFFSET ?")
+    params.extend([limit, offset])
+
+    try:
+        rows = conn.execute("\n".join(sql), params).fetchall()
+    except sqlite3.OperationalError as exc:
+        raise ValueError(f"invalid search query: {query!r}") from exc
+
     results = [
         SearchResultItem(doc_id=row["doc_id"], snippet=row["snippet"], rank=row["rank"])
         for row in rows

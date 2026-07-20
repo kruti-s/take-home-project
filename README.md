@@ -25,15 +25,15 @@ SQLite's FTS5 extension.
 | `GET` | `/documents` | List all documents |
 | `GET` | `/documents/{id}` | Get a single document |
 | `DELETE` | `/documents/{id}` | Delete a document |
-| `PATCH` | `/documents/{id}` | Apply changes (insert/replace/delete, by text-match or position range) |
-| `GET` | `/documents/search` | Full-text search across all documents |
-| `GET` | `/documents/{id}/search` | Full-text search within one document |
+| `PATCH` | `/documents/{id}` | Apply changes (insert/replace/delete, by text-match or position range), or preview them |
+| `GET` | `/documents/search` | Full-text search, optionally restricted to specific document ids |
 
 ### PATCH /documents/{id}
 
 Each change locates its edit with **exactly one** of `target` (text-match)
 or `range` (position offsets) — not both. `new_text` holds the new content;
-leave it `""` for `"delete"`.
+leave it `""` for `"delete"`. Set `"preview": true` to get back a diff
+without writing anything.
 
 Text-match based:
 
@@ -62,6 +62,15 @@ Position based:
   ]
 }
 ```
+
+### GET /documents/search
+
+`q` is required; `ids` (repeatable, e.g. `?ids=1&ids=2`) optionally
+restricts the search to specific documents; `limit`/`offset` paginate.
+Results are ranked by FTS5's `bm25` rank, with a `<mark>`-highlighted
+snippet per match. `q` is always bound as a parameter and quoted as a
+single FTS5 phrase literal before being sent to `MATCH`, so it can never
+be interpreted as FTS5 query syntax.
 
 ## Running
 

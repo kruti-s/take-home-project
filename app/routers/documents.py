@@ -50,14 +50,19 @@ def list_documents(conn: sqlite3.Connection = Depends(get_db)) -> DocumentListOu
 @router.get("/search", response_model=SearchResponse)
 def search_documents(
     q: str = Query(..., description="Search query"),
+    ids: list[int] | None = Query(None, description="Restrict search to these document ids"),
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(get_db),
 ) -> SearchResponse:
-    """Full-text search across all documents.
+    """Full-text search across documents, ranked by relevance.
 
     Args:
-        q: The search query string.
+        q: The search query string. Bound as a parameter and quoted as a
+            single FTS5 phrase literal, so user input can never be
+            interpreted as FTS5 query syntax (or SQL).
+        ids: If given, restrict the search to these document ids (e.g.
+            `?ids=1&ids=2`) instead of searching every document.
         limit: Maximum number of results to return.
         offset: Number of results to skip, for pagination.
         conn: SQLite connection, injected per-request.
@@ -65,7 +70,10 @@ def search_documents(
     Returns:
         Matching documents ranked by relevance.
     """
-    return search_service.search_all(conn, q, limit, offset)
+    try:
+        return search_service.search_documents(conn, q, limit, offset, ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{doc_id}", response_model=DocumentOut)
@@ -136,29 +144,3 @@ def patch_document(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/{doc_id}/search", response_model=SearchResponse)
-def search_document(
-    doc_id: int,
-    q: str = Query(..., description="Search query"),
-    limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    conn: sqlite3.Connection = Depends(get_db),
-) -> SearchResponse:
-    """Full-text search restricted to a single document.
-
-    Args:
-        doc_id: Identifier of the document to search within.
-        q: The search query string.
-        limit: Maximum number of results to return.
-        offset: Number of results to skip, for pagination.
-        conn: SQLite connection, injected per-request.
-
-    Returns:
-        Matching passages within the document, ranked by relevance.
-    """
-    try:
-        return search_service.search_document(conn, doc_id, q, limit, offset)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
